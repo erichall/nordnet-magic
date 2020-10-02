@@ -1,0 +1,7 @@
+(ns nordnet-magic.core-test
+  (:require [clojure.test :refer :all]
+            [nordnet-magic.core :refer :all]))
+
+(deftest a-test
+  (testing "FIXME, I fail."
+    (is (= 1 1))))
