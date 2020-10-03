@@ -1,6 +1,6 @@
 # nordnet-magic
 
-FIXME: description
+Auto blocking evil connection attempts for ngninx.
 
 ## Installation
 
