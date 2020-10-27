@@ -280,6 +280,22 @@
                :value-sek value-sek
                :dist      (/ value-sek total-value)})))))
 
+(defn get-split
+  [state funds-stocks name]
+  (let [n (get-in state [:split name])]
+    (if (some? n)
+      n
+      (do
+        (println "Unable to find the name - " name)
+        (println "We found these names:")
+        (doseq [n_ funds-stocks]
+          (println "\t " (:name n_))
+          )
+        (println "And the split from config.edn has these names: ")
+        (doseq [n_ (keys (get-in state [:split]))]
+          (println "\t " n_))
+        (System/exit 1)))))
+
 (defn sek-to-buy
   "Amount to buy to keep the balance correct for the given stock
   percent-of-stock * (total-new-investment + current-total-value) - current-stock-value = sek-to-buy"
@@ -293,13 +309,17 @@
                          (mapv :buy)
                          (apply +)) (:investment state)))))}
   [state]
-  (let [total-value (get-total-value state)]
+  (let [total-value (get-total-value state)
+        funds-stocks (get-funds-and-stock state)]
     (->>
-      (get-funds-and-stock state)
+      funds-stocks
       (mapv (fn [{:keys [name value-sek]}]
-              (let [to-buy (- (* (get-in state [:split name])
-                                 (+ (:investment state) total-value))
-                              value-sek)]
+              (let [split (get-split state funds-stocks name)
+                    to-buy (if (:keep-split state)
+                             (- (* split
+                                   (+ (:investment state) total-value))
+                                value-sek)
+                             (* split (:investment state)))]
                 {:name          name
                  :value-sek     value-sek
                  :new-value-sek (+ value-sek to-buy)
@@ -309,9 +329,10 @@
 
 (defn round-map
   [m]
-  (map (fn [v] (reduce-kv (fn [a k v] (if (string? v)
-                                        (assoc a k v)
-                                        (assoc a k (format "%.2f" v)))) {} v)) m))
+  (map (fn [v] (reduce-kv (fn [a k v]
+                            (if (string? v)
+                              (assoc a k v)
+                              (assoc a k (format "%.2f" v)))) {} v)) m))
 (defn pprint-info
   [state]
   (let [headers ["INSTRUMENT" "VALUE" "NEW-VALUE" "BUY-SEK" "DIST" "NEW-DIST"]
@@ -330,6 +351,7 @@
 
   (swap! state-atom assoc :investment (:investment config))
   (swap! state-atom assoc :split (:split config))
+  (swap! state-atom assoc :keep-split (:keep-split config))
 
   ;; open the browser
   (println "Starting browser...")
@@ -384,17 +406,18 @@
   (pprint-info @state-atom)
 
   ;; print total value
-  (println "\nTotal new value..." (get-total-value @state-atom) " Kr"))
+  (println "\nInvested value:\t\t" (:investment @state-atom) " kr\nTotal new value:\t\t" (get-total-value @state-atom) " Kr"))
 
 (comment
   (get-asset-names @state-atom)
   (get-asset-distribution @state-atom)
   (get-total-value @state-atom)
   (sek-to-buy @state-atom)
-
+  (pprint-info @state-atom)
 
   (let [config (-> (slurp "config.edn") clojure.edn/read-string)]
     (init! config)
     )
+
   )
 
