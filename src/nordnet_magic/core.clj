@@ -79,27 +79,27 @@
 (def stock-title "Börshandlat")
 (def fund-title "Fonder")
 
-(def stock->keyword {"Namn"             :name
-                     "Valuta"           :currency
-                     "Antal"            :quantity
-                     "GAV"              :GAV
-                     "Idag %"           :dev-today
-                     "Senaste kurs"     :last-bid
-                     "Värde"            :value
-                     "Värde SEK"        :value-sek
-                     "Avkast. %"        :revenue-%
-                     "Avkast.&nbsp;SEK" :revenue-sek})
+(def fund->keyword {"Namn"         :name
+                    "Valuta"       :currency
+                    "Antal"        :quantity
+                    "GAV"          :GAV
+                    "Idag %"       :dev-today
+                    "Senaste kurs" :last-bid
+                    "Värde"        :value
+                    "Värde SEK"    :value-sek
+                    "Avkast. %"    :revenue-%
+                    "Avkast. SEK"  :revenue-sek})
 
-(def fund->keyword {"Namn"              :name
-                    "Valuta"            :currency
-                    "Antal"             :quantity
-                    "Snittkurs"         :mean-price
-                    "1 dag %"           :dev-today
-                    "Inköpsv.&nbsp;SEK" :purchase-value
-                    "Senaste NAV"       :last-NAV
-                    "Värde&nbsp;SEK"    :value-sek
-                    "Avkast. %"         :revenue-%
-                    "Avkast.&nbsp;SEK"  :revenue-sek})
+(def stock->keyword {"Namn"         :name
+                     "Valuta"       :currency
+                     "Antal"        :quantity
+                     "Snittkurs"    :mean-price
+                     "1 dag %"      :dev-today
+                     "Inköpsv. SEK" :purchase-value
+                     "Senaste NAV"  :last-NAV
+                     "Värde SEK"    :value-sek
+                     "Avkast. %"    :revenue-%
+                     "Avkast. SEK"  :revenue-sek})
 
 (def select-values (comp vals select-keys))
 
@@ -109,6 +109,10 @@
 
 (defn asort [order amap]
   (conj {} (select-keys amap order)))
+
+(defn in?
+  [coll elm]
+  (some #(= elm %) coll))
 
 (defn encode
   [to-encode]
@@ -169,13 +173,12 @@
   {:pre  [(s/or :funds (s/and (s/valid? string? table-header) (s/valid? (fn [v] (re-matches (re-pattern fund-title) v)) table-header))
                 :stock (s/and (s/valid? string? table-header) (s/valid? (fn [v] (re-matches (re-pattern stock-title) v)) table-header)))]
    :post [(every? #(= (count %) 10) %)]}
-  (let [query [
-               {:tag :h2 :fn/has-text table-header}
+  (let [query [{:tag :h2 :fn/has-text table-header}
                {:xpath "ancestor::header//.."}
                {:tag :div :fn/has-class "kzvPKu"}
                {:tag :span :fn/has-class "lgGULA"}]]
     (->>
-      (api/query-all driver query)
+      (api/query-all driver {:tag :div :role "row"})
       (mapv (partial api/get-element-text-el driver))
       (partition 10)
       (mapv vec))))
@@ -236,17 +239,50 @@
                       (apply +))]
     (+ stock-sum fund-sum)))
 
+;(defn get-raw-data!
+;  [{:keys [driver table-headers]}]
+;  {:pre [(every? map? table-headers)
+;         (every? (fn [{:keys [header type]}]
+;                   (or (and #(re-matches (re-pattern fund-title) header) (= type :fund))
+;                       (and #(re-matches (re-pattern stock-title) header) (= type :stock)))) table-headers)]}
+;  (reduce (fn [data {:keys [header type]}]
+;            (let [values (get-table-values! {:driver driver :table-header header})
+;                  headers (get-table-headers! {:driver driver :table-header header})]
+;              (-> (assoc-in data [:columns type] values)
+;                  (assoc-in [:headers type] headers)))) {} table-headers))
+
 (defn get-raw-data!
-  [{:keys [driver table-headers]}]
-  {:pre [(every? map? table-headers)
-         (every? (fn [{:keys [header type]}]
-                   (or (and #(re-matches (re-pattern fund-title) header) (= type :fund))
-                       (and #(re-matches (re-pattern stock-title) header) (= type :stock)))) table-headers)]}
-  (reduce (fn [data {:keys [header type]}]
-            (let [values (get-table-values! {:driver driver :table-header header})
-                  headers (get-table-headers! {:driver driver :table-header header})]
-              (-> (assoc-in data [:columns type] values)
-                  (assoc-in [:headers type] headers)))) {} table-headers))
+  [{:keys [driver]}]
+  (->>
+    (api/query-all @driver-atom {:tag :div :role "row"})
+    (mapv (fn [el-id] (api/get-element-text-el driver el-id)))
+    (reduce (fn [acc row]
+              (if (re-find #"Namn" row)
+                (conj acc [row])
+                (let [l (dec (count acc))]
+                  (assoc acc l (conj (last acc) row))))) [])
+    (map (fn [group] (map (fn [row] (clojure.string/split row #"\n")) group)))
+    (map (fn [group] (map (fn [row] (filter (fn [ent]
+                                              (not
+                                                (or (re-matches #"KöpSälj" ent)
+                                                    (re-matches #"Byt" ent)
+                                                    (re-matches #"Totalt" ent)))) row)) group)))
+    ;; remove the 'total' data row
+    (map (fn [group] (filter (fn [row] (> (count row) 7)) group)))
+    (reduce (fn [data group]
+              (cond
+                (in? (first group) "GAV")
+                (-> (assoc-in data [:headers :fund] (first group))
+                    (assoc-in [:columns :fund] (rest group)))
+
+                (in? (first group) "Snittkurs")
+                (-> (assoc-in data [:headers :stock] (first group))
+                    (assoc-in [:columns :stock] (rest group)))
+                )
+
+              ) {})
+    )
+  )
 
 (defn parse-raw-data
   [state]
@@ -289,8 +325,7 @@
         (println "Unable to find the name - " name)
         (println "We found these names:")
         (doseq [n_ funds-stocks]
-          (println "\t " (:name n_))
-          )
+          (println "\t " (:name n_)))
         (println "And the split from config.edn has these names: ")
         (doseq [n_ (keys (get-in state [:split]))]
           (println "\t " n_))
@@ -381,6 +416,7 @@
       (api/wait-visible {:tag :h2 :fn/has-text fund-title})
       ;; I think the graph messes things up, hope it renders within 5 sec
       (api/wait 5))
+
     (doto (deref driver-atom)
       (do (println "Login in with bankid..."))
       (login! :bankid
@@ -418,6 +454,12 @@
   (let [config (-> (slurp "config.edn") clojure.edn/read-string)]
     (init! config)
     )
+
+  (get-raw-data! {:driver        @driver-atom
+                  :table-headers [{:header stock-title :type :stock}
+                                  {:header fund-title :type :fund}]})
+
+  (clojure.pprint/pprint @state-atom)
 
   )
 
